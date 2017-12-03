@@ -3,26 +3,31 @@ import tensorflow as tf
 import numpy as np
 import  os
 import math
+import sys
 from keras.preprocessing import sequence
 
-feat_path = 'data/feats.npy'
-annotation_path = 'data/annotations.pickle'
-model_path = 'modelNewFinal/'
+########################################Reading the input arguments#######################################
+model_path = sys.argv[1]
+feat_path = sys.argv[2]
+annotation_path = sys.argv[3]
+##########################################################################################################
 
+# annotation_path = 'data/annotations.pickle'
+
+########################################Model parameters##################################################
 learning_rate = 0.001
-# decay_rate = 
 n_epochs = 1000    
 dim_embed = 256
 dim_ctx = 512
 dim_hidden = 256
 ctx_shape = [196,512]
 n_lstm_steps = 30
-batch_size = 80
+batch_size = 1
 stddev = 1.0
-# bias_init_vector = None
+###########################################################################################################
 
-
-def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): # borrowed this function from NeuralTalk
+#####################################Building the vocabulary###############################################
+def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): 
     print ('preprocessing word counts and creating vocab based on word count threshold %d' % (word_count_threshold, ))
     word_counts = {}
     nsents = 0
@@ -34,9 +39,9 @@ def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): # borrowed
     print ('filtered words from %d to %d' % (len(word_counts), len(vocab)))
 
     ixtoword = {}
-    ixtoword[0] = '.'  # period at the end of the sentence. make first dimension be end token
+    ixtoword[0] = '.'  
     wordtoix = {}
-    wordtoix['#START#'] = 0 # make first vector be the start token
+    wordtoix['#START#'] = 0 
     ix = 1
     for w in vocab:
       wordtoix[w] = ix
@@ -54,19 +59,18 @@ print('.................Loading data.............')
 feats = np.load(feat_path)
 annotation_data = pd.read_pickle(annotation_path)
 captions = annotation_data['caption'].values
-print(captions)
+# print(captions)
 print('...............Done Loading...............')
 
 wordtoix, ixtoword, bias_init_vector = preProBuildWordVocab(captions)
 
 np.save('data/ixtoword', ixtoword)
-# print("no of words", len(wordtoix))
-n_words = len(wordtoix)  #update this
+n_words = len(wordtoix)  
 maxlen = np.max( map(lambda x: len(x.split(' ')), captions) )
 n_lstm_steps = maxlen + 1
+##############################################################################################################
 
-
-
+#####################################Creating the tensorflow graph############################################
 graph = tf.Graph()
 with graph.as_default():
     context = tf.placeholder(tf.float32,shape=(batch_size,ctx_shape[0],ctx_shape[1]))
@@ -174,56 +178,54 @@ with graph.as_default():
         return loss
 
     loss = model(context,sentence,mask)
-    global_step = tf.Variable(50)  # count the number of steps taken.
+    # Tried learning rate with decay, but didnt produce appropriate results.
+    # global_step = tf.Variable(50)  # count the number of steps taken.
     # learning_rate = tf.train.exponential_decay(learning_rate, global_step, 50,0.9)  #learning_rate*0.97^(global_step/50)
     # learning_rate = 0.001
     optimizer = tf.train.AdamOptimizer(learning_rate).minimize(loss)
-        
+ ###########################################################################################################################       
 
 ##########################################Training Process Begins############################################################
 
 sess = tf.InteractiveSession()
 
 index = list(annotation_data.index)
-# print(index)
 np.random.shuffle(index)
 annotation_data = annotation_data.ix[index]
 
 captions = annotation_data['caption'].values
-# print(captions)
 image_id = annotation_data['image_id'].values
-with tf.device('/device:GPU:2'):
-    with tf.Session(graph=graph) as sess:
-        saver = tf.train.Saver(max_to_keep=50)
+# with tf.device('/device:GPU:2'):   #You can specify the gpu id here, by default it takes the visible gpu
+with tf.Session(graph=graph) as sess:
+    saver = tf.train.Saver(max_to_keep=50)
 
-        tf.initialize_all_variables().run()
+    tf.initialize_all_variables().run()
 
-        for epoch in range(n_epochs):
-            for start, end in zip( \
-                range(0, len(captions), batch_size),
-                range(batch_size, len(captions), batch_size)):
+    for epoch in range(n_epochs):
+        for start, end in zip( \
+            range(0, len(captions), batch_size),
+            range(batch_size, len(captions), batch_size)):
 
-                current_feats = feats[image_id[start:end]]
-                current_feats = current_feats.reshape(-1, ctx_shape[1], ctx_shape[0]).swapaxes(1,2)
+            current_feats = feats[image_id[start:end]]
+            current_feats = current_feats.reshape(-1, ctx_shape[1], ctx_shape[0]).swapaxes(1,2)
 
-                current_captions = captions[start:end]
-                current_caption_ind = map(lambda cap: [wordtoix[word] for word in cap.lower().split(' ')[:-1] if word in wordtoix], current_captions)
+            current_captions = captions[start:end]
+            current_caption_ind = map(lambda cap: [wordtoix[word] for word in cap.lower().split(' ')[:-1] if word in wordtoix], current_captions)
 
-                current_caption_matrix = sequence.pad_sequences(current_caption_ind, padding='post', maxlen=maxlen+1)
-                # print(current_caption_matrix)
-                current_mask_matrix = np.zeros((current_caption_matrix.shape[0], current_caption_matrix.shape[1]))
-                nonzeros = np.array( map(lambda x: (x != 0).sum()+1, current_caption_matrix ))
+            current_caption_matrix = sequence.pad_sequences(current_caption_ind, padding='post', maxlen=maxlen+1)
+            # print(current_caption_matrix)
+            current_mask_matrix = np.zeros((current_caption_matrix.shape[0], current_caption_matrix.shape[1]))
+            nonzeros = np.array( map(lambda x: (x != 0).sum()+1, current_caption_matrix ))
 
-                for ind, row in enumerate(current_mask_matrix):
-                    row[:nonzeros[ind]] = 1
+            for ind, row in enumerate(current_mask_matrix):
+                row[:nonzeros[ind]] = 1
                 
-                _, loss_value = sess.run([optimizer, loss], feed_dict={
-                    context:current_feats,
-                    sentence:current_caption_matrix,
-                    mask:current_mask_matrix})
+            _, loss_value = sess.run([optimizer, loss], feed_dict={
+                context:current_feats,
+                sentence:current_caption_matrix,
+                mask:current_mask_matrix})
 
-                print "Current Cost: ", loss_value
-            # learning_rate *= 0.95    
+            print "Current Cost: ", loss_value 
 
-            print ("Epoch ", epoch, " is done. Saving the model ... ")
-            saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)
+        print ("Epoch ", epoch, " is done. Saving the model ... ")
+        saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)

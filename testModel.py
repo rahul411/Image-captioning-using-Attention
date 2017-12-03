@@ -4,41 +4,36 @@ import numpy as np
 import  os
 import math
 from keras.preprocessing import sequence
-import cv2
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
-
-import cPickle as pkl
-
 import matplotlib.cm as cm
-
+from sys import argv
 import skimage
 import skimage.transform
 import skimage.io
-from cnn_util import *
+from utilities import *
 
-from PIL import Image
+#########################Take the input arguments#########################################################
+model_path = argv[1]
+test_image_path = argv[2]
+test_feat = argv[3]
+annotation_path = argv[4]
+#########################################################################################################
 
-# feat_path = 'data/feats.npy'
-annotation_path = 'data/annotations.pickle'
-model_path = 'model-18'
-test_feat = 'data/Train-1000092795.npy'
-test_image_path = 'data/flickr30k_images/1000092795.jpg'
-learning_rate = 0.01
-# decay_rate = 
-n_epochs = 1000    
+# annotation_path = 'data/annotations.pickle'
+
+################################Model parameters########################################################   
 dim_embed = 256
 dim_ctx = 512
 dim_hidden = 256
 ctx_shape = [196,512]
 n_lstm_steps = 30
-batch_size = 1#80
+batch_size = 1  #for testing batchsize is kept as 1, since we are testing one image at a time.
 stddev = 1.0
-# bias_init_vector = None
+##########################################################################################################
 
-
-def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): # borrowed this function from NeuralTalk
-    print ('preprocessing word counts and creating vocab based on word count threshold %d' % (word_count_threshold, ))
+#################################Building the vocabulary for generating captions###########################
+def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): 
     word_counts = {}
     nsents = 0
     for sent in sentence_iterator:
@@ -49,9 +44,9 @@ def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): # borrowed
     print ('filtered words from %d to %d' % (len(word_counts), len(vocab)))
 
     ixtoword = {}
-    ixtoword[0] = '.'  # period at the end of the sentence. make first dimension be end token
+    ixtoword[0] = '.'  
     wordtoix = {}
-    wordtoix['#START#'] = 0 # make first vector be the start token
+    wordtoix['#START#'] = 0 
     ix = 1
     for w in vocab:
       wordtoix[w] = ix
@@ -60,28 +55,26 @@ def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): # borrowed
 
     word_counts['.'] = nsents
     bias_init_vector = np.array([1.0*word_counts[ixtoword[i]] for i in ixtoword])
-    bias_init_vector /= np.sum(bias_init_vector) # normalize to frequencies
+    bias_init_vector /= np.sum(bias_init_vector) 
     bias_init_vector = np.log(bias_init_vector)
-    bias_init_vector -= np.max(bias_init_vector) # shift to nice numeric range
+    bias_init_vector -= np.max(bias_init_vector) 
     return wordtoix, ixtoword, bias_init_vector
 
 print('.................Loading data.............')
-# feats = np.load(feat_path)
 annotation_data = pd.read_pickle(annotation_path)
 captions = annotation_data['caption'].values
 print(captions)
 print('...............Done Loading...............')
 
 wordtoix, ixtoword, bias_init_vector = preProBuildWordVocab(captions)
+##############################################################################################################
 
-# np.save('data/ixtoword', ixtoword)
-# print("no of words", len(wordtoix))
 n_words = len(wordtoix)  #update this
 maxlen = np.max( map(lambda x: len(x.split(' ')), captions) )
 n_lstm_steps = maxlen + 1
 
 
-
+#####################################Creating the tensorflow Graph###########################################
 graph = tf.Graph()
 with graph.as_default():
     context = tf.placeholder(tf.float32,shape=(batch_size,ctx_shape[0],ctx_shape[1]))
@@ -181,17 +174,15 @@ with graph.as_default():
 ##########################################Testing Process Begins############################################################
 
 sess = tf.InteractiveSession()
-
+print('testing begins')
 with tf.Session(graph=graph) as sess:
     saver = tf.train.Saver(max_to_keep=50)
     saver.restore(sess,model_path)
 
     feat = np.load(test_feat).reshape(-1, ctx_shape[1], ctx_shape[0]).swapaxes(1,2)
 
-
     generated_word_index, alpha_list = sess.run([generated_words,alpha_list], feed_dict={context:feat})
-    # alpha_list_val = sess.run([alpha_list], feed_dict={context:feat})
-    # print(alpha_list)
+    
     generated_words = [ixtoword[x[0]] for x in generated_word_index]
     punctuation = np.argmax(np.array(generated_words) == '.')+1
     print(generated_words)
@@ -199,12 +190,8 @@ with tf.Session(graph=graph) as sess:
     alpha_list = alpha_list[:punctuation]
     print(generated_words)
     img = mpimg.imread(test_image_path)
-    # plt.imshow(img)
-    # plt.title(' '.join(generated_words))
-    # plt.show()
-    # alpha_list_val = alpha_list_val[:punctuation]
-    # generated_words, alpha_list_val
-    print(len(alpha_list))
+
+    ################################Displaying Image and Attention Maps############################################
     img = crop_image(test_image_path)
 
     alphas = np.array(alpha_list).swapaxes(1,2)
@@ -216,7 +203,7 @@ with tf.Session(graph=graph) as sess:
     plt.subplot(w, h, 1)
     plt.imshow(img)
     plt.axis('off')
-    # plt.show()
+
     smooth = True
 
     for ii in xrange(alphas.shape[0]):
@@ -237,4 +224,4 @@ with tf.Session(graph=graph) as sess:
         plt.axis('off')
     plt.show()
 
-    
+    ##################################################################################################################
